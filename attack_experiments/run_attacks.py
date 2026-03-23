@@ -1,76 +1,84 @@
 import os
-import math
-import numpy as np
-import pandas as pd
-from PIL import Image
 from tqdm import tqdm
 import pickle
+import logging
 
 import torch
-import torch.nn.functional as F
 
-from torchvision import transforms
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-from compressai.zoo import (
-    bmshj2018_factorized,
-    bmshj2018_hyperprior,
-    cheng2020_anchor,
-    cheng2020_attn
-)
-
-from metrics import *
-from attacks import *
 from utils import *
 from config import *
 
+def main():
+    setup_logger()
 
-os.makedirs("results/x_adv", exist_ok=True)
-os.makedirs("results/x_hat", exist_ok=True)
+    args = parse_args()
+    MODEL_NAME = args.model
+    DEVICE = args.device
+    DATA_PATH = args.data_path
 
-images, image_names = load_kodak()
-models = get_models(DEVICE)
+    logging.info(f"Selected model: {MODEL_NAME}")
+    logging.info(f"Running on device: {DEVICE}\n")
+    base_dir = os.path.join("results", MODEL_NAME)
+    os.makedirs(base_dir, exist_ok=True)
 
-results_attack = []
+    logging.info("Loading Kodak24 dataset...")
+    images, image_names = load_kodak(DATA_PATH)
+    images = [img.unsqueeze(0).to(DEVICE) for img in images]
+    logging.info(f"Loaded {len(images)} images\n")
 
-for loss_name, loss_fn in LOSSES.items():
-    for attack_name, attack_fn in tqdm(ATTACKS.items()):
-        for eps in EPSILONS:
-            for model_name, model in models.items():
-                for img, name in zip(images, image_names):
-                    x = img.unsqueeze(0).to(DEVICE)
+    logging.info("Loading model...")
+    model = get_model(DEVICE, MODEL_NAME)
+    logging.info("Model loaded successfully\n")
 
+    results_attack = []
+    total_runs = (len(LOSSES) * len(ATTACKS) * len(EPSILONS) * len(images))
+    logging.info(f"Total runs to execute: {total_runs}\n")
+
+    for i_loss, (loss_name, loss_fn) in enumerate(LOSSES.items()):
+        for i_at, (attack_name, attack_fn) in enumerate(ATTACKS.items()):
+            for i_eps, eps in enumerate(EPSILONS):
+                print("")
+                logging.info(f"Starting loss: {loss_name}, {i_loss}/{len(LOSSES)}")
+                logging.info(f"Attack: {attack_name}, {i_at}/{len(ATTACKS)}")
+                logging.info(f"Epsilon: {eps}, {i_eps}/{len(EPSILONS)}")
+
+                for img, name in tqdm(zip(images, image_names), total=len(images), desc="Images", leave=False):
                     if eps == 0:
-                        x_adv = x.clone()
+                        x_adv = img.clone()
                     else:
-                        x_adv, _ = attack_fn(model, x, eps=eps, loss_fn=loss_fn)
+                        x_adv, _ = attack_fn(model, img, eps=eps, loss_fn=loss_fn)
 
                     with torch.no_grad():
-                        out, metrics = evaluate_model(model, x_adv, METRICS)
-                        x_hat = out["x_hat"]
+                        _, metrics = evaluate_model(model, x_adv, METRICS)
 
-                    adv_filename = f"results/x_adv/{model_name}_{attack_name}_{loss_name}_eps{eps:.5f}_{name}.png"
-                    hat_filename = f"results/x_hat/{model_name}_{attack_name}_{loss_name}_eps{eps:.5f}_{name}.png"
-                    
-
-                    save_img(x_adv, adv_filename)
-                    save_img(x_hat, hat_filename)
+                    if eps != 0:
+                        dir_path = os.path.join(base_dir, loss_name, attack_name, f"eps_{eps:.5f}")
+                        os.makedirs(dir_path, exist_ok=True)
+                        adv_filename = os.path.join(dir_path, f"{name}.png")
+                        save_img(x_adv, adv_filename)
+                    else:
+                        adv_filename = os.path.join("data", f"{name}.png")
 
                     results_attack.append({
                         "attack": attack_name,
                         "epsilon": eps,
                         "loss" : loss_name,
-                        "model": model_name,
                         "image": name,
                         "metrics": metrics,
                         "adv_path": adv_filename,
-                        "hat_path": hat_filename,\
                     })
 
-                    del x, x_adv, x_hat,out
+                    del x_adv
+
+                if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-with open("results_attack.pkl", "wb") as f:
-    pickle.dump(results_attack, f)
+            results_file = os.path.join(base_dir, f"results_{MODEL_NAME}.pkl")
+            save_pickle(results_file, results_attack)
+    
+    final_results_file = os.path.join(base_dir, f"results_{MODEL_NAME}_all.pkl")
+    save_pickle(final_results_file, results_attack)
+    logging.info("Code finished successfully")
+
+if __name__ == "__main__":
+    main()
