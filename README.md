@@ -44,7 +44,9 @@ AdverAttackProj/
 │
 └── defense_experiments/           # Pre-compression defense evaluation
     ├── AdvAttck_defense1_attack2_toupload.ipynb  # Full defense-before-attack pipeline
-    └── defense_before_attacks     # Placeholder/config file
+    ├──defense_before_attacks     # Placeholder/config file
+    ├──defense_before_attack_cheng2020-anchor.csv     #File with all calculated metrics on anchor model
+    └── defense_for_graphs.ipynb #Graphs
 ```
 
 ---
